@@ -1,0 +1,30 @@
+# Entorno virtual
+venv/
+env/
+ENV/
+
+# Caché de Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+data/raw/
+
+# Modelos entrenados
+*.pt
+*.pth
+*.h5
+*.pkl
+*.joblib
+models/*.pt
+models/*.pth
+models/*.h5
+
+# Archivos del sistema operativo
+.DS_Store
+Thumbs.db
+
+# Variables 
+.env
