@@ -7,28 +7,31 @@ Este repositorio contiene la implementación oficial del sistema de grado orient
 El sistema utiliza el conjunto de datos de referencia **UNSW-NB15** y se encuentra blindado contra ataques de envenenamiento de modelos mediante algoritmos de agregación robusta (**Trimmed Mean**).
 
 ---
-
 ## 🏗️ Arquitectura del Sistema
 
+```text
 ┌──────────────┐         ┌──────────────┐         ┌──────────────┐
 │  Cliente 0   │         │  Cliente 1   │         │  Cliente 2   │
-│ (Entrenamiento)│       │ (Entrenamiento)│       │ (Entrenamiento)│
+│(Entrenamiento)│        │(Entrenamiento)│        │(Entrenamiento)│
 └──────┬───────┘         └──────┬───────┘         └──────┬───────┘
-│                        │                        │
-│ Encapsulamiento PQC (Kyber-768) + Cifrado AES-256-GCM
-▼                        ▼                        ▼
+       │                        │                        │
+       └────────────────────────┼────────────────────────┘
+                                │
+   Encapsulamiento PQC (Kyber-768) + Cifrado AES-256-GCM
+                                ▼
 ┌────────────────────────────────────────────────────────────────┐
 │                        SERVIDOR CENTRAL                        │
 │  1. Desencapsulación PQC & Descifrado de Gradientes            │
 │  2. Defensa contra Envenenamiento (Trimmed Mean Aggregation)   │
 │  3. Actualización y Distribución del Modelo Global             │
 └───────────────────────────────┬────────────────────────────────┘
-│
-▼
-┌───────────────────────┐
-│  Dashboard en Vivo    │
-│  (Monitoreo Dash/Plotly)│
-└───────────────────────┘
+                                │
+                                ▼
+                     ┌───────────────────────┐
+                     │  Dashboard en Vivo    │
+                     │ (Monitoreo Dash/Plotly)│
+                     └───────────────────────┘
+```
 
 ---
 
