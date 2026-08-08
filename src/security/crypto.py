@@ -1,90 +1,54 @@
-import base64
-import pickle
-import torch
-from Crypto.Cipher import AES
-from Crypto.Random import get_random_bytes
+import oqs
+import os
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-class MockKyber:
-    """Simula las funciones de un KEM Post-Cuántico (Kyber)."""
-    def generate_keypair(self):
-        pub = get_random_bytes(800)
-        sec = get_random_bytes(1632)
-        return pub, sec
+class PQCAESTunnel:
+    """
+    Túnel Híbrido PQC-AES.
+    Utiliza ML-KEM (Kyber) para el intercambio seguro de llaves post-cuánticas
+    y AES-256-GCM para el cifrado de alto rendimiento de los gradientes.
+    """
+    def __init__(self, kem_alg="Kyber768"):
+        self.kem_alg = kem_alg
+        # Mantenemos el objeto KEM del servidor instanciado para conservar 
+        # intactas las referencias de memoria C (_ctypes) entre las fases.
+        self.server_kem = oqs.KeyEncapsulation(self.kem_alg)
 
-    def encapsulate(self, public_key, shared_secret_aes):
-        return get_random_bytes(768)
+    def generate_server_keypair(self):
+        """Genera el par de llaves post-cuánticas del servidor."""
+        pub_key = self.server_kem.generate_keypair()
+        priv_key = self.server_kem.export_secret_key()
+        return pub_key, priv_key
 
-    def decapsulate(self, ciphertext_key, secret_key):
-        return get_random_bytes(32)
+    def client_encapsulate(self, server_pub_key):
+        """El cliente usa la llave pública del servidor para encapsular un secreto."""
+        with oqs.KeyEncapsulation(self.kem_alg) as client_kem:
+            ciphertext, shared_secret = client_kem.encap_secret(server_pub_key)
+        return ciphertext, shared_secret
 
-class MockDilithium:
-    """Simula las funciones de una Firma Digital Post-Cuántica (Dilithium)."""
-    def generate_keypair(self):
-        pub = get_random_bytes(1312)
-        sec = get_random_bytes(2528)
-        return pub, sec
+    def server_decapsulate(self, server_priv_key, ciphertext):
+        """El servidor desencapsula el secreto usando su estado interno seguro."""
+        # Al usar self.server_kem, evitamos inyectar 'bytes' crudos
+        # y permitimos que la librería en C maneje su propia decapsulación.
+        shared_secret = self.server_kem.decap_secret(ciphertext)
+        return shared_secret
 
-    def sign(self, message: bytes, private_key):
-        return get_random_bytes(2420)
+    def encrypt_payload(self, shared_secret, plaintext_data):
+        """Cifra los pesos del modelo usando AES-256-GCM con el secreto PQC."""
+        aesgcm = AESGCM(shared_secret[:32])
+        nonce = os.urandom(12) 
+        ciphertext = aesgcm.encrypt(nonce, plaintext_data, None)
+        return nonce + ciphertext
 
-    def verify(self, message: bytes, signature: bytes, public_key):
-        return True
+    def decrypt_payload(self, shared_secret, encrypted_payload):
+        """Descifra los pesos recibidos en el servidor."""
+        aesgcm = AESGCM(shared_secret[:32])
+        nonce = encrypted_payload[:12]
+        ciphertext = encrypted_payload[12:]
+        plaintext_data = aesgcm.decrypt(nonce, ciphertext, None)
+        return plaintext_data
 
-def aes_encrypt(data: bytes, key: bytes) -> dict:
-    """Cifra datos utilizando AES en modo GCM."""
-    cipher = AES.new(key, AES.MODE_GCM)
-    ciphertext, tag = cipher.encrypt_and_digest(data)
-    return {
-        'nonce': base64.b64encode(cipher.nonce).decode(),
-        'tag': base64.b64encode(tag).decode(),
-        'ciphertext': base64.b64encode(ciphertext).decode()
-    }
-
-def aes_decrypt(enc_data: dict, key: bytes) -> bytes:
-    """Descifra datos utilizando AES en modo GCM."""
-    nonce = base64.b64decode(enc_data['nonce'])
-    tag = base64.b64decode(enc_data['tag'])
-    ciphertext = base64.b64decode(enc_data['ciphertext'])
-    
-    cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
-    return cipher.decrypt_and_verify(ciphertext, tag)
-
-def encrypt_and_sign_model_pqc_aes(
-    model_state: dict, 
-    kyber_pub: bytes, 
-    dilithium_priv: bytes, 
-    real_aes_key: bytes, 
-    kyber_mock: MockKyber, 
-    dilithium_mock: MockDilithium
-) -> dict:
-    """Aplica encapsulación KEM, cifrado AES y firma Dilithium a los pesos del modelo."""
-    # Convertir a numpy CPU para serialización segura
-    model_bytes = pickle.dumps({k: v.cpu().numpy() for k, v in model_state.items()})
-    
-    kem_ciphertext = kyber_mock.encapsulate(kyber_pub, real_aes_key)
-    encrypted_model = aes_encrypt(model_bytes, real_aes_key)
-    signed_model = dilithium_mock.sign(pickle.dumps(encrypted_model), dilithium_priv)
-    
-    return {
-        'encrypted_model': encrypted_model,
-        'cipher_key_enc': base64.b64encode(kem_ciphertext).decode(),
-        'signature': base64.b64encode(signed_model).decode()
-    }
-
-def decrypt_and_verify_model_pqc_aes(
-    payload: dict, 
-    kyber_priv: bytes, 
-    dilithium_pub: bytes, 
-    real_aes_key: bytes, 
-    dilithium_mock: MockDilithium, 
-    device: torch.device
-) -> dict:
-    """Verifica la firma, descifra y recupera los tensores del modelo."""
-    signature = base64.b64decode(payload['signature'])
-    encrypted_model = payload['encrypted_model']
-    
-    dilithium_mock.verify(pickle.dumps(encrypted_model), signature, dilithium_pub)
-    decrypted_bytes = aes_decrypt(encrypted_model, real_aes_key)
-    
-    data = pickle.loads(decrypted_bytes)
-    return {k: torch.tensor(v).to(device) for k, v in data.items()}
+    def __del__(self):
+        """Libera la memoria de C de forma segura al destruir el objeto."""
+        if hasattr(self, 'server_kem'):
+            self.server_kem.free()

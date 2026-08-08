@@ -1,76 +1,79 @@
-import copy
 import torch
-import numpy as np
+import copy
 
-def train_local(model: torch.nn.Module, dataloader, device: torch.device, epochs: int = 2, lr: float = 1e-3) -> dict:
+class FederatedAggregator:
     """
-    Entrena localmente una copia del modelo global en los datos de un cliente.
+    Módulo para la agregación robusta de pesos en el Aprendizaje Federado.
+    Implementa defensas contra Model Poisoning.
     """
-    local_model = copy.deepcopy(model).to(device)
-    optimizer = torch.optim.Adam(local_model.parameters(), lr=lr)
-    loss_fn = torch.nn.BCEWithLogitsLoss()
-    
-    local_model.train()
-    for _ in range(epochs):
-        for Xb, yb in dataloader:
-            Xb, yb = Xb.to(device), yb.to(device)
-            optimizer.zero_grad()
-            loss = loss_fn(local_model(Xb), yb)
-            loss.backward()
-            optimizer.step()
+    def __init__(self, defense_mechanism='trimmed_mean', trim_ratio=0.2):
+        self.defense_mechanism = defense_mechanism
+        self.trim_ratio = trim_ratio
+
+    def aggregate(self, client_weights):
+        """
+        Recibe una lista de state_dicts (pesos de los clientes) y retorna el state_dict agregado.
+        """
+        if not client_weights:
+            raise ValueError("La lista de pesos de los clientes está vacía.")
+
+        if self.defense_mechanism == 'trimmed_mean':
+            return self._trimmed_mean(client_weights)
+        elif self.defense_mechanism == 'median':
+            return self._median(client_weights)
+        else:
+            return self._fed_avg(client_weights)
+
+    def _fed_avg(self, client_weights):
+        """Federated Averaging estándar (sin defensa)."""
+        global_weights = copy.deepcopy(client_weights[0])
+        num_clients = len(client_weights)
+
+        for key in global_weights.keys():
+            stacked_weights = torch.stack([client_weights[i][key] for i in range(num_clients)])
             
-    return local_model.state_dict()
+            # Verificación de tipo de dato para evitar errores con tensores Long (ej. num_batches_tracked)
+            if not stacked_weights.is_floating_point():
+                global_weights[key] = torch.mean(stacked_weights.float(), dim=0).to(stacked_weights.dtype)
+            else:
+                global_weights[key] = torch.mean(stacked_weights, dim=0)
+                
+        return global_weights
 
-def fedavg(pesos_clientes: list) -> dict:
-    """Agregación clásica FedAvg (Promedio simple de los pesos)."""
-    agg = copy.deepcopy(pesos_clientes[0])
-    for k in agg.keys():
-        for i in range(1, len(pesos_clientes)):
-            agg[k] = agg[k] + pesos_clientes[i][k]
-        agg[k] = agg[k] / len(pesos_clientes)
-    return agg
+    def _trimmed_mean(self, client_weights):
+        """
+        Media Recortada: Elimina los valores extremos antes de promediar.
+        """
+        global_weights = copy.deepcopy(client_weights[0])
+        num_clients = len(client_weights)
+        trim_count = int(num_clients * self.trim_ratio)
 
-def median_defense(pesos_clientes: list) -> dict:
-    """Defensa robusta mediante Mediana (resistente a envenenamiento de datos)."""
-    with torch.no_grad():
-        agregados = {}
-        for k in pesos_clientes[0].keys():
-            stacked = torch.stack([p[k].float() for p in pesos_clientes])
-            agregados[k] = torch.median(stacked, dim=0).values
-        return agregados
+        if num_clients <= 2 * trim_count:
+            return self._fed_avg(client_weights)
 
-def trimmed_defense(pesos_clientes: list, trim_ratio: float = 0.1) -> dict:
-    """Defensa robusta mediante Media Recortada (descarta los extremos)."""
-    with torch.no_grad():
-        agregados = {}
-        for k in pesos_clientes[0].keys():
-            stacked = torch.stack([p[k].float() for p in pesos_clientes])
-            lower = int(trim_ratio * len(stacked))
-            upper = len(stacked) - lower
+        for key in global_weights.keys():
+            stacked_weights = torch.stack([client_weights[i][key] for i in range(num_clients)])
+            sorted_weights, _ = torch.sort(stacked_weights, dim=0)
+            trimmed_weights = sorted_weights[trim_count : num_clients - trim_count]
             
-            sorted_vals, _ = torch.sort(stacked, dim=0)
-            trimmed = sorted_vals[lower:upper]
-            agregados[k] = trimmed.mean(dim=0)
-        return agregados
+            # Verificación de tipo de dato para PyTorch
+            if not trimmed_weights.is_floating_point():
+                global_weights[key] = torch.mean(trimmed_weights.float(), dim=0).to(trimmed_weights.dtype)
+            else:
+                global_weights[key] = torch.mean(trimmed_weights, dim=0)
+            
+        return global_weights
 
-def krum_defense(pesos_clientes: list) -> dict:
-    """
-    Defensa Krum: Selecciona el modelo del cliente más cercano a la mayoría 
-    (menor distancia euclidiana general).
-    """
-    with torch.no_grad():
-        num_clients = len(pesos_clientes)
-        distancias = np.zeros((num_clients, num_clients))
-        
-        for i in range(num_clients):
-            for j in range(num_clients):
-                if i != j:
-                    dist = 0
-                    for k in pesos_clientes[0].keys():
-                        dist += torch.norm(pesos_clientes[i][k].float() - pesos_clientes[j][k].float()).item()
-                    distancias[i, j] = dist
-                    
-        puntajes = distancias.sum(axis=1)
-        idx_mejor = np.argmin(puntajes)
-        
-        return copy.deepcopy(pesos_clientes[idx_mejor])
+    def _median(self, client_weights):
+        """
+        Mediana Robusta: Toma la mediana de los pesos.
+        """
+        global_weights = copy.deepcopy(client_weights[0])
+        num_clients = len(client_weights)
+
+        for key in global_weights.keys():
+            stacked_weights = torch.stack([client_weights[i][key] for i in range(num_clients)])
+            median_weights, _ = torch.median(stacked_weights, dim=0)
+            global_weights[key] = median_weights
+            
+        return global_weights

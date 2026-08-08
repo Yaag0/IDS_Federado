@@ -1,55 +1,73 @@
-import os
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.preprocessing import MinMaxScaler, LabelEncoder
 from sklearn.model_selection import train_test_split
-import torch
 
-def load_and_preprocess_data(data_path: str, test_size: float = 0.2, random_state: int = 42):
-    """
-    Carga el dataset UNSW-NB15, maneja valores nulos, codifica variables categóricas,
-    normaliza las características y devuelve los tensores listos para PyTorch.
-    """
-    file_path = os.path.join(data_path, "UNSW_NB15_training-set.csv")
+def preprocess_unsw_nb15(filepath):
+    print("[*] Cargando el dataset UNSW-NB15...")
+    df = pd.read_csv(filepath)
+
+    # Asegurar que los nombres de las columnas no tengan espacios en blanco
+    df.columns = df.columns.str.strip()
+
+    # Eliminar la columna de ID y la subcategoría de ataque (attack_cat) 
+    # para evitar fuga de datos (Data Leakage) en nuestra clasificación binaria
+    cols_to_drop = [col for col in ['id', 'attack_cat', 'Attack_cat'] if col in df.columns]
+    if cols_to_drop:
+        df = df.drop(columns=cols_to_drop)
+
+    # Identificar la columna objetivo (normal vs ataque)
+    target_col = 'label' if 'label' in df.columns else 'Label'
     
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"No se encontró el dataset en: {file_path}. Por favor, colócalo en la carpeta data/raw/")
+    X = df.drop(columns=[target_col])
+    y = df[target_col].values
 
-    print(f"Cargando dataset desde {file_path}...")
-    df = pd.read_csv(file_path)
-    print(f"Dataset cargado exitosamente. Dimensiones iniciales: {df.shape}")
-
-    # Copia de seguridad y validación de etiqueta
-    data = df.copy()
-    if 'label' not in data.columns:
-        raise ValueError("El dataset no contiene la columna obligatoria 'label'.")
+    # ---------------------------------------------------------
+    # CORRECCIÓN: CODIFICACIÓN DE VARIABLES CATEGÓRICAS (TEXTO)
+    # ---------------------------------------------------------
+    print("[*] Transformando variables de texto a valores numéricos...")
+    categorical_cols = X.select_dtypes(include=['object']).columns
     
-    data['label'] = data['label'].astype(int)
+    for col in categorical_cols:
+        le = LabelEncoder()
+        # Convertimos texto como 'udp', 'tcp', 'dns' en números enteros como 0, 1, 2...
+        X[col] = le.fit_transform(X[col].astype(str))
 
-    # Codificación de columnas categóricas de forma segura
-    cat_cols = data.select_dtypes(include=['object']).columns.tolist()
-    for col in cat_cols:
-        data[col] = LabelEncoder().fit_transform(data[col].astype(str))
-
-    # Separación de características (X) y etiquetas (y)
-    X = data.drop(columns=['label'])
-    y = data['label'].astype(int)
-
-    # Escalado de características (StandardScaler)
-    scaler = StandardScaler()
+    # ---------------------------------------------------------
+    # ESCALADO MIN-MAX
+    # ---------------------------------------------------------
+    print("[*] Aplicando Min-Max Scaling [0, 1]...")
+    scaler = MinMaxScaler()
     X_scaled = scaler.fit_transform(X)
 
-    # División estratificada de los datos
+    # Separar en conjunto de entrenamiento y validación
     X_train, X_test, y_train, y_test = train_test_split(
-        X_scaled, y, test_size=test_size, random_state=random_state, stratify=y
+        X_scaled, y, test_size=0.2, random_state=42
     )
 
-    # Conversión a tensores de PyTorch (optimizados para float32)
-    X_train_t = torch.tensor(X_train, dtype=torch.float32)
-    y_train_t = torch.tensor(y_train.values, dtype=torch.float32).view(-1, 1)
-    X_test_t  = torch.tensor(X_test, dtype=torch.float32)
-    y_test_t  = torch.tensor(y_test.values, dtype=torch.float32).view(-1, 1)
+    return (X_train, y_train), (X_test, y_test)
 
-    print(f"Datos preprocesados -> Train: {X_train_t.shape}, Test: {X_test_t.shape}")
+
+def create_non_iid_splits(X, y, num_clients):
+    """
+    Divide los datos de forma Non-IID (No independientes e idénticamente distribuidos)
+    para simular un entorno realista de Aprendizaje Federado.
+    """
+    print(f"[*] Creando particiones de datos para {num_clients} clientes...")
     
-    return X_train_t, y_train_t, X_test_t, y_test_t, X.columns.tolist()
+    # Para este PoC, hacemos una distribución heterogénea aleatorizada simple
+    splits = []
+    data_len = len(X)
+    indices = np.random.permutation(data_len)
+    
+    chunk_size = data_len // num_clients
+    
+    for i in range(num_clients):
+        start = i * chunk_size
+        # El último cliente se lleva el residuo de datos
+        end = start + chunk_size if i != num_clients - 1 else data_len
+        
+        client_idx = indices[start:end]
+        splits.append((X[client_idx], y[client_idx]))
+        
+    return splits

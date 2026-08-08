@@ -1,0 +1,11 @@
+version: '3.8'
+
+services:
+  ids_simulacion:
+    build: .
+    container_name: quantum_ids_container
+    volumes:
+      # Sincroniza tu código local con el contenedor en tiempo real
+      - .:/app
+    # Le decimos a Docker que ejecute nuestro orquestador principal
+    command: python main.py

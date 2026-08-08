@@ -1,88 +1,150 @@
-import os
 import torch
-from torch.utils.data import TensorDataset, DataLoader
+import torch.nn as nn
+import torch.optim as optim
+import copy
+import sys
+import os
+import pickle
+import pandas as pd
 
-# Importaciones de los módulos locales
-from src.utils.preprocessing import load_and_preprocess_data
-from src.models.ids_net import IDSNetBinario
-from src.models.federated import train_local, fedavg, krum_defense
-from src.security.crypto import (
-    MockKyber, MockDilithium, 
-    encrypt_and_sign_model_pqc_aes, 
-    decrypt_and_verify_model_pqc_aes
-)
-from src.utils.metrics import evaluate_model, print_metrics, save_confusion_matrix, save_roc_curve
-from Crypto.Random import get_random_bytes
+# Asegurar que el directorio src sea reconocible como paquete
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from src.utils.preprocessing import preprocess_unsw_nb15, create_non_iid_splits
+from src.models.ids_net import IDSNet
+from src.models.federated import FederatedAggregator
+from src.security.crypto import PQCAESTunnel
+
+# Configuración de hiperparámetros
+ROUNDS = 5
+NUM_CLIENTS = 3
+LOCAL_EPOCHS = 2
+LEARNING_RATE = 0.01
+DATASET_PATH = "data/raw/UNSW_NB15_training-set.csv"
+
+def train_local_client(client_id, model, data, labels, criterion, tunnel, server_pub_key):
+    """
+    Simula el entrenamiento local de un nodo cliente y el envío seguro de sus pesos.
+    """
+    print(f"\n--- [Cliente {client_id}] Iniciando entrenamiento local ---")
+    model.train()
+    optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
+    
+    # Convertir datos a tensores
+    inputs = torch.FloatTensor(data)
+    targets = torch.LongTensor(labels)
+    
+    for epoch in range(LOCAL_EPOCHS):
+        optimizer.zero_grad()
+        outputs = model(inputs)
+        loss = criterion(outputs, targets)
+        loss.backward()
+        optimizer.step()
+        
+    final_loss = loss.item()
+    print(f"[Cliente {client_id}] Entrenamiento finalizado. Loss final: {final_loss:.4f}")
+    
+    # Extraer los pesos actualizados
+    local_weights = model.state_dict()
+    
+    # ---------------------------------------------------------
+    # FASE DE SEGURIDAD POST-CUÁNTICA (CLIENTE)
+    # ---------------------------------------------------------
+    print(f"[Cliente {client_id}] Encapsulando clave simétrica (ML-KEM / Kyber-768)...")
+    ciphertext, shared_secret = tunnel.client_encapsulate(server_pub_key)
+    
+    # Serializar los pesos para enviarlos
+    plaintext_weights = pickle.dumps(local_weights)
+    
+    print(f"[Cliente {client_id}] Cifrando gradientes (AES-256-GCM)...")
+    encrypted_payload = tunnel.encrypt_payload(shared_secret, plaintext_weights)
+    
+    return ciphertext, encrypted_payload, final_loss
+
+
+def guardar_metricas_csv(historial_loss):
+    """Guarda las métricas en un archivo CSV para la lectura del dashboard en tiempo real."""
+    df_metrics = pd.DataFrame(historial_loss)
+    df_metrics.to_csv("metrics.csv", index=False)
+
 
 def main():
-    # 1. Configuración inicial y directorios
-    print("Iniciando orquestación del sistema...")
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Dispositivo de entrenamiento: {device}")
-    
-    os.makedirs('reports/figures', exist_ok=True)
-    os.makedirs('data/raw', exist_ok=True)
-    
-    # 2. Carga y preprocesamiento de datos
-    # NOTA: Asegúrate de tener el archivo UNSW_NB15_training-set.csv en data/raw/
+    print("==========================================================")
+    print(" INICIANDO QUANTUM SECURITY IDS FEDERADO ")
+    print("==========================================================\n")
+
+    # 1. Preparar datos
     try:
-        X_train, y_train, X_test, y_test, features = load_and_preprocess_data(data_path='data/raw')
-    except FileNotFoundError as e:
-        print(f"Error crítico: {e}")
+        (X_train, y_train), (X_test, y_test) = preprocess_unsw_nb15(DATASET_PATH)
+        client_splits = create_non_iid_splits(X_train, y_train, num_clients=NUM_CLIENTS)
+    except FileNotFoundError:
+        print(f"[!] Error: No se encontró el dataset en {DATASET_PATH}.")
+        print("Por favor, asegúrate de colocar el CSV en la carpeta 'data/'.")
         return
 
-    train_loader = DataLoader(TensorDataset(X_train, y_train), batch_size=256, shuffle=True)
-    test_loader = DataLoader(TensorDataset(X_test, y_test), batch_size=256, shuffle=False)
-
-    # 3. Inicialización del modelo global
     input_dim = X_train.shape[1]
-    global_model = IDSNetBinario(input_dim).to(device)
-    
-    # 4. Simulación de Aprendizaje Federado
-    print("\n--- Iniciando Aprendizaje Federado (Simulación 3 clientes) ---")
-    client_weights = []
-    for client_id in range(3):
-        print(f"Entrenando Cliente {client_id + 1}...")
-        pesos = train_local(global_model, train_loader, device, epochs=3)
-        client_weights.append(pesos)
+
+    # 2. Inicializar Modelo Global y Agregador
+    global_model = IDSNet(input_dim=input_dim, num_classes=2)
+    aggregator = FederatedAggregator(defense_mechanism='trimmed_mean', trim_ratio=0.2)
+    criterion = nn.CrossEntropyLoss()
+    tunnel = PQCAESTunnel(kem_alg="Kyber768")
+
+    historial_loss = []
+
+    for round_num in range(1, ROUNDS + 1):
+        print(f"\n==================== RONDA FEDERADA {round_num}/{ROUNDS} ====================")
         
-    print("\nAgregando pesos con defensa Krum...")
-    global_weights = krum_defense(client_weights)
-    global_model.load_state_dict(global_weights)
-    
-    # 5. Seguridad PQC (Cifrado Híbrido)
-    print("\n--- Asegurando modelo con PQC y AES ---")
-    kyber = MockKyber()
-    dilithium = MockDilithium()
-    
-    kyber_pub, _ = kyber.generate_keypair()
-    dilithium_pub, dilithium_priv = dilithium.generate_keypair()
-    real_aes_key = get_random_bytes(32)
-    
-    # Simular servidor enviando modelo cifrado
-    payload = encrypt_and_sign_model_pqc_aes(
-        global_weights, kyber_pub, dilithium_priv, real_aes_key, kyber, dilithium
-    )
-    print("Modelo cifrado y firmado exitosamente.")
-    
-    # Simular cliente recibiendo y descifrando modelo
-    decrypted_weights = decrypt_and_verify_model_pqc_aes(
-        payload, b'dummy_kyber_priv', dilithium_pub, real_aes_key, dilithium, device
-    )
-    global_model.load_state_dict(decrypted_weights)
-    print("Modelo descifrado y verificado exitosamente.")
-    
-    # 6. Evaluación
-    print("\n--- Evaluando Modelo Global ---")
-    y_true, y_pred, y_probs = evaluate_model(global_model, test_loader, device)
-    
-    metrics = print_metrics(y_true, y_pred, strategy_name="Modelo Global Krum + PQC")
-    
-    # Generar y guardar figuras
-    save_confusion_matrix(y_true, y_pred, save_path='reports/figures/confusion_matrix.png')
-    save_roc_curve(y_true, y_probs, save_path='reports/figures/roc_curve.png')
-    print("\nGráficas guardadas en reports/figures/")
-    print("¡Ejecución finalizada con éxito!")
+        # 3. Generar par de llaves PQC del Servidor Central para esta ronda
+        print("[Servidor] Generando llaves PQC (ML-KEM)...")
+        server_pub_key, server_priv_key = tunnel.generate_server_keypair()
+        
+        client_weights_list = []
+        round_losses = {}
+        
+        # 4. Flujo de los Clientes
+        for client_id in range(NUM_CLIENTS):
+            client_data, client_labels = client_splits[client_id]
+            
+            # Cada cliente parte del modelo global actual
+            local_model = copy.deepcopy(global_model)
+            
+            # Entrenamiento local y transmisión segura
+            ciphertext, encrypted_payload, client_loss = train_local_client(
+                client_id, local_model, client_data, client_labels, 
+                criterion, tunnel, server_pub_key
+            )
+            
+            round_losses[f"Cliente_{client_id}"] = client_loss
+            
+            # ---------------------------------------------------------
+            # FASE DE SEGURIDAD POST-CUÁNTICA (SERVIDOR)
+            # ---------------------------------------------------------
+            shared_secret = tunnel.server_decapsulate(server_priv_key, ciphertext)
+            decrypted_data = tunnel.decrypt_payload(shared_secret, encrypted_payload)
+            received_weights = pickle.loads(decrypted_data)
+            
+            client_weights_list.append(received_weights)
+            print(f"[Servidor] Gradientes del Cliente {client_id} recibidos y descifrados con éxito.")
+
+        # Registrar métricas de la ronda actual
+        historial_loss.append({
+            "Ronda": round_num,
+            "Cliente_0": round_losses.get("Cliente_0", 0),
+            "Cliente_1": round_losses.get("Cliente_1", 0),
+            "Cliente_2": round_losses.get("Cliente_2", 0)
+        })
+        guardar_metricas_csv(historial_loss)
+
+        # 5. Agregación Robusta en el Servidor
+        print("\n[Servidor] Agregando pesos usando defensa: Trimmed Mean...")
+        new_global_weights = aggregator.aggregate(client_weights_list)
+        global_model.load_state_dict(new_global_weights)
+        print(f"[Servidor] Modelo global actualizado para la ronda {round_num}.")
+
+    print("\n==========================================================")
+    print(" ENTRENAMIENTO FEDERADO COMPLETADO ")
+    print("==========================================================")
 
 if __name__ == "__main__":
     main()
