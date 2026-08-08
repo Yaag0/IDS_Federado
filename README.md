@@ -64,26 +64,30 @@ El sistema utiliza el conjunto de datos de referencia **UNSW-NB15** y se encuent
 
 ### 1. Clonar el Repositorio y Configurar el Entorno
 ```bash
-# Clonar o acceder a la carpeta del proyecto
-cd IDS_Federado
+# git clone https://github.com/Yaag0/IDS_Federado
+```
 
-# Crear y activar el entorno virtual (Nota: usar activate.fish si usas Fish shell)
+# Crear y activar el entorno virtual
+```bash
 python -m venv venv
 source venv/bin/activate.fish  # o source venv/bin/activate en Bash/Zsh
+```
 
 ### 2. Instalar las Herramientas de Compilación Nativas
 ```bash
 sudo pacman -S base-devel cmake python-virtualenv
+```
 
 ### 3. Instalar Dependencias de Python y el Módulo PQC
 ```bash
 pip install -r requirements.txt
-
+```
 ### 4. Ejecución del Experimento Federado
 ```bash
 python main.py
-
+```
 ### 5. Lanzar el Panel de Control
 ```bash
 python dashboard.py
+```
 
