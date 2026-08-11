@@ -48,6 +48,7 @@ El sistema utiliza el conjunto de datos de referencia **UNSW-NB15** y se encuent
 ---
 
 ## 📂 Estructura del Repositorio
+```text
 .
 ├── main.py                # Orquestador principal del entrenamiento federado
 ├── federated.py           # Lógica de clientes, servidor y agregación (Trimmed Mean / FedAvg)
@@ -57,7 +58,7 @@ El sistema utiliza el conjunto de datos de referencia **UNSW-NB15** y se encuent
 ├── metrics.py             # Cálculo de matrices de confusión, curvas ROC y métricas globales
 ├── dashboard.py           # Interfaz web en tiempo real (Dash & Plotly)
 └── requirements.txt       # Dependencias del proyecto
-
+```
 ---
 
 ## 📊 Resultados Experimentales Destacados
