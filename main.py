@@ -16,14 +16,15 @@ from src.utils.preprocessing import preprocess_unsw_nb15, create_non_iid_splits
 from src.models.ids_net import IDSNet
 from src.models.federated import FederatedAggregator
 from src.security.crypto import PQCAESTunnel
+from src.security.attacks import apply_model_poisoning
 
 ROUNDS = 5
-NUM_CLIENTS = 3
+NUM_CLIENTS = 5  
 LOCAL_EPOCHS = 2
 LEARNING_RATE = 0.01
 DATASET_PATH = "data/raw/UNSW_NB15_training-set.csv"
 
-def train_local_client(client_id, model, data, labels, criterion, tunnel, server_pub_key, device):
+def train_local_client(client_id, model, data, labels, criterion, tunnel, server_pub_key, device, attack_type=None):
     model.train()
     optimizer = optim.Adam(model.parameters(), lr=LEARNING_RATE)
     
@@ -39,14 +40,16 @@ def train_local_client(client_id, model, data, labels, criterion, tunnel, server
         
     local_weights = model.state_dict()
     
-    # Medición real de latencia del túnel PQC (Encapsulación + Cifrado AES)
+    if attack_type is not None:
+        local_weights = apply_model_poisoning(local_weights, attack_type=attack_type)
+    
     t_inicio = time.perf_counter()
     ciphertext, shared_secret = tunnel.client_encapsulate(server_pub_key)
     plaintext_weights = pickle.dumps(local_weights)
     encrypted_payload = tunnel.encrypt_payload(shared_secret, plaintext_weights)
     t_fin = time.perf_counter()
     
-    latencia_pqc_ms = (t_fin - t_inicio) * 1000.0  # Convertir a milisegundos
+    latencia_pqc_ms = (t_fin - t_inicio) * 1000.0 
     
     return ciphertext, encrypted_payload, loss.item(), latencia_pqc_ms
 
@@ -78,7 +81,6 @@ def main():
 
     global_model = IDSNet(input_dim=input_dim, num_classes=2).to(device)
     
-    # Instanciación del agregador federado con defensa Trimmed Mean activa
     aggregator = FederatedAggregator(defense_mechanism='trimmed_mean', trim_ratio=0.2)
     criterion = nn.CrossEntropyLoss()
     tunnel = PQCAESTunnel(kem_alg="Kyber768")
@@ -97,15 +99,20 @@ def main():
             client_data, client_labels = client_splits[client_id]
             local_model = copy.deepcopy(global_model).to(device)
             
+            attack_type = None
+            if client_id == 0:
+                attack_type = "noise"
+            elif client_id == 1:
+                attack_type = "scaling"
+                
             ciphertext, encrypted_payload, client_loss, lat_ms = train_local_client(
                 client_id, local_model, client_data, client_labels, 
-                criterion, tunnel, server_pub_key, device
+                criterion, tunnel, server_pub_key, device, attack_type=attack_type
             )
             
             round_losses[f"Cliente_{client_id}"] = client_loss
             round_latencias.append(lat_ms)
             
-            # Desencapsulación y descifrado en el servidor
             shared_secret = tunnel.server_decapsulate(server_priv_key, ciphertext)
             decrypted_data = tunnel.decrypt_payload(shared_secret, encrypted_payload)
             
@@ -115,25 +122,24 @@ def main():
             "Ronda": round_num,
             "Cliente_0": round_losses.get("Cliente_0", 0),
             "Cliente_1": round_losses.get("Cliente_1", 0),
-            "Cliente_2": round_losses.get("Cliente_2", 0)
+            "Cliente_2": round_losses.get("Cliente_2", 0),
+            "Cliente_3": round_losses.get("Cliente_3", 0),
+            "Cliente_4": round_losses.get("Cliente_4", 0)
         })
         guardar_metricas_csv(historial_loss)
         
-        # Registrar latencias reales y estimación comparativa frente a HE (Homomorphic Encryption)
         promedio_latencia = sum(round_latencias) / len(round_latencias)
         historial_latencias.append({
             "ronda": round_num,
             "t_actual_mediana": promedio_latencia,
             "t_simulado_pqc": promedio_latencia,
-            "t_simulado_he": promedio_latencia * 18.5  # Factor de escalado teórico documentado frente a HE
+            "t_simulado_he": promedio_latencia * 18.5  
         })
         guardar_latencias_csv(historial_latencias)
         
-        # Agregación robusta aplicando Trimmed Mean
         new_global_weights = aggregator.aggregate(client_weights_list)
         global_model.load_state_dict(new_global_weights)
 
-    # Evaluación final y generación de artefactos (Matriz de confusión, Curva ROC, CSV de métricas)
     evaluate_and_save_metrics(
         model=global_model,
         dataloader=test_loader,
