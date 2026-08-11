@@ -1,5 +1,6 @@
 import os
 import torch
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -62,7 +63,7 @@ def evaluate_and_save_metrics(model, dataloader, device, scenario_name, results_
     plt.plot([0, 1], [0, 1], 'k--')
     plt.xlabel('FPR')
     plt.ylabel('TPR')
-    plt.title(f'ROC - {scenario_name}')
+    plt.title(f'ROC - {scenario_name}')  # <-- CORREGIDO AQUÍ (plt.title en lugar de plt.setTitle)
     plt.legend()
     plt.savefig(os.path.join(results_dir, f'roc_{scenario_name}.png'), dpi=300)
     plt.close()
