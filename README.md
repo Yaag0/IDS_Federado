@@ -47,6 +47,26 @@ El sistema utiliza el conjunto de datos de referencia **UNSW-NB15** y se encuent
 
 ---
 
+## 📂 Estructura del Repositorio
+.
+├── main.py                # Orquestador principal del entrenamiento federado
+├── federated.py           # Lógica de clientes, servidor y agregación (Trimmed Mean / FedAvg)
+├── crypto.py              # Envoltorio para Kyber-768 (PQC) y AES-256-GCM
+├── ids_net.py             # Arquitectura de la red neuronal profunda (IDSNet)
+├── preprocessing.py       # Limpieza, normalización Min-Max y particionamiento de UNSW-NB15
+├── metrics.py             # Cálculo de matrices de confusión, curvas ROC y métricas globales
+├── dashboard.py           # Interfaz web en tiempo real (Dash & Plotly)
+└── requirements.txt       # Dependencias del proyecto
+
+---
+
+## 📊 Resultados Experimentales Destacados
+
+* **Rendimiento Global:** El modelo alcanza un AUC de ~0.8982 en la detección de intrusiones bajo escenarios de red adversarios.
+* **Resiliencia:** La defensa mediante Trimmed Mean aísla de manera efectiva ataques de ruido y escalado inyectados por nodos maliciosos (en comparación con el colapso operativo observado bajo FedAvg clásico).
+
+---
+
 ## 🛠️ Requisitos del Sistema y Dependencias
 
 * **Sistema Operativo:** Linux (Recomendado: Arch Linux / Ubuntu con herramientas de compilación).
