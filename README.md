@@ -7,28 +7,31 @@ Este repositorio contiene la implementación oficial del sistema de grado orient
 El sistema utiliza el conjunto de datos de referencia **UNSW-NB15** y se encuentra blindado contra ataques de envenenamiento de modelos mediante algoritmos de agregación robusta (**Trimmed Mean**).
 
 ---
-
 ## 🏗️ Arquitectura del Sistema
 
+```text
 ┌──────────────┐         ┌──────────────┐         ┌──────────────┐
 │  Cliente 0   │         │  Cliente 1   │         │  Cliente 2   │
-│ (Entrenamiento)│       │ (Entrenamiento)│       │ (Entrenamiento)│
+│(Entrenamiento)│        │(Entrenamiento)│        │(Entrenamiento)│
 └──────┬───────┘         └──────┬───────┘         └──────┬───────┘
-│                        │                        │
-│ Encapsulamiento PQC (Kyber-768) + Cifrado AES-256-GCM
-▼                        ▼                        ▼
+       │                        │                        │
+       └────────────────────────┼────────────────────────┘
+                                │
+   Encapsulamiento PQC (Kyber-768) + Cifrado AES-256-GCM
+                                ▼
 ┌────────────────────────────────────────────────────────────────┐
 │                        SERVIDOR CENTRAL                        │
 │  1. Desencapsulación PQC & Descifrado de Gradientes            │
 │  2. Defensa contra Envenenamiento (Trimmed Mean Aggregation)   │
 │  3. Actualización y Distribución del Modelo Global             │
 └───────────────────────────────┬────────────────────────────────┘
-│
-▼
-┌───────────────────────┐
-│  Dashboard en Vivo    │
-│  (Monitoreo Dash/Plotly)│
-└───────────────────────┘
+                                │
+                                ▼
+                     ┌───────────────────────┐
+                     │  Dashboard en Vivo    │
+                     │ (Monitoreo Dash/Plotly)│
+                     └───────────────────────┘
+```
 
 ---
 
@@ -61,26 +64,30 @@ El sistema utiliza el conjunto de datos de referencia **UNSW-NB15** y se encuent
 
 ### 1. Clonar el Repositorio y Configurar el Entorno
 ```bash
-# Clonar o acceder a la carpeta del proyecto
-cd IDS_Federado
+# git clone https://github.com/Yaag0/IDS_Federado
+```
 
-# Crear y activar el entorno virtual (Nota: usar activate.fish si usas Fish shell)
+### 2. Crear y activar el entorno virtual
+```bash
 python -m venv venv
 source venv/bin/activate.fish  # o source venv/bin/activate en Bash/Zsh
+```
 
-### 2. Instalar las Herramientas de Compilación Nativas
+### 3. Instalar las Herramientas de Compilación Nativas
 ```bash
 sudo pacman -S base-devel cmake python-virtualenv
+```
 
-### 3. Instalar Dependencias de Python y el Módulo PQC
+### 4. Instalar Dependencias de Python y el Módulo PQC
 ```bash
 pip install -r requirements.txt
-
-### 4. Ejecución del Experimento Federado
+```
+### 5. Ejecución del Experimento Federado
 ```bash
 python main.py
-
-### 5. Lanzar el Panel de Control
+```
+### 6. Lanzar el Panel de Control
 ```bash
 python dashboard.py
+```
 
