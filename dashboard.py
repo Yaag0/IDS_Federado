@@ -1,73 +1,62 @@
-import dash
-from dash import dcc, html
-from dash.dependencies import Input, Output
-import dash_bootstrap_components as dbc
-import plotly.graph_objs as go
-import pandas as pd
 import os
+import pandas as pd
+from dash import Dash, dcc, html, Input, Output
+import dash_bootstrap_components as dbc
+import plotly.express as px
 
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.CYBORG])
-app.title = "Quantum IDS - Monitor en Tiempo Real"
+app = Dash(__name__, external_stylesheets=[dbc.themes.CYBORG])
+
+def load_data():
+    results_path = "results"
+    met_path = os.path.join(results_path, "metricas_completas.csv")
+    lat_path = os.path.join(results_path, "latencias_agregacion.csv")
+    
+    df_metrics = pd.read_csv(met_path) if os.path.exists(met_path) else pd.DataFrame()
+    df_lat = pd.read_csv(lat_path) if os.path.exists(lat_path) else pd.DataFrame()
+    return df_metrics, df_lat
 
 app.layout = dbc.Container([
-    dbc.Row([
-        dbc.Col(html.H1("Quantum Security IDS - Aprendizaje Federado", className="text-center text-primary mt-4 mb-4"), width=12)
-    ]),
-    
-    # Componente de intervalo que se dispara cada 2 segundos para actualizar los datos
-    dcc.Interval(
-        id='interval-component',
-        interval=2*1000, # en milisegundos (2 segundos)
-        n_intervals=0
-    ),
+    html.H2("QSF-IDS", className="mt-4 mb-4 text-center", style={"fontFamily": "serif"}),
     
     dbc.Row([
-        dbc.Col(
+        dbc.Col([
             dbc.Card([
-                dbc.CardHeader("Métricas de Nodos Locales (En Vivo)", className="fw-bold"),
-                dbc.CardBody([dcc.Graph(id='live-loss-graph')])
-            ], className="shadow-lg"), 
-            width=12
-        )
-    ]),
+                dbc.CardHeader("Comparativa de Métricas (F1, Accuracy)"),
+                dbc.CardBody(dcc.Graph(id="metrics-graph"))
+            ])
+        ], md=6),
+        dbc.Col([
+            dbc.Card([
+                dbc.CardHeader("Análisis de Latencia PQC (ms) por Ronda"),
+                dbc.CardBody(dcc.Graph(id="lat-graph"))
+            ])
+        ], md=6)
+    ], className="mb-4"),
     
-    dbc.Row([
-        dbc.Col(html.P("Estado del Túnel: Activo (Kyber-768 + AES-256-GCM)", className="text-success text-center mt-3"), width=12)
-    ])
+    dcc.Interval(id='interval-component', interval=5000, n_intervals=0)
 ], fluid=True)
 
-# Callback para actualizar la gráfica automáticamente leyendo el archivo CSV
 @app.callback(
-    Output('live-loss-graph', 'figure'),
-    [Input('interval-component', 'n_intervals')]
+    Output('metrics-graph', 'figure'),
+    Output('lat-graph', 'figure'),
+    Input('interval-component', 'n_intervals')
 )
-def update_graph_live(n):
-    fig = go.Figure()
+def update_graphs(n):
+    df_metrics, df_lat = load_data()
     
-    # Verificamos si el archivo de métricas ya existe
-    if os.path.exists("metrics.csv"):
-        df = pd.read_csv("metrics.csv")
-        
-        if not df.empty:
-            rondas = df['Ronda']
-            
-            fig.add_trace(go.Scatter(x=rondas, y=df['Cliente_0'], mode='lines+markers', name='Cliente 0', line=dict(width=3)))
-            fig.add_trace(go.Scatter(x=rondas, y=df['Cliente_1'], mode='lines+markers', name='Cliente 1', line=dict(width=3)))
-            fig.add_trace(go.Scatter(x=rondas, y=df['Cliente_2'], mode='lines+markers', name='Cliente 2', line=dict(width=3)))
+    if not df_metrics.empty:
+        df_melt = df_metrics.melt(id_vars="escenario", value_vars=["accuracy", "precision", "recall", "f1"])
+        fig_metrics = px.bar(df_melt, x="variable", y="value", color="escenario", barmode="group", template="plotly_dark")
+    else:
+        fig_metrics = px.bar(title="Esperando datos...", template="plotly_dark")
 
-    fig.update_layout(
-        title="Convergencia del Entrenamiento (Loss por Ronda)",
-        xaxis_title="Ronda Federada",
-        yaxis_title="Función de Pérdida (Loss)",
-        template="plotly_dark",
-        plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)'
-    )
-    
-    # Forzamos que el eje X muestre estrictamente números enteros en las rondas
-    fig.update_xaxes(dtick=1)
-    
-    return fig
+    if not df_lat.empty:
+        fig_lat = px.line(df_lat, x="ronda", y=["t_actual_mediana", "t_simulado_he"], markers=True, template="plotly_dark")
+        fig_lat.update_yaxes(title="Tiempo (ms)")
+    else:
+        fig_lat = px.line(title="Esperando latencias...", template="plotly_dark")
+        
+    return fig_metrics, fig_lat
 
 if __name__ == '__main__':
     app.run(debug=True, port=8050)
