@@ -10,15 +10,15 @@ El sistema utiliza el conjunto de datos de referencia **UNSW-NB15** y se encuent
 ## 🏗️ Arquitectura del Sistema
 
 ```text
-┌──────────────┐         ┌──────────────┐         ┌──────────────┐
-│  Cliente 0   │         │  Cliente 1   │         │  Cliente 2   │
-│(Entrenamiento)│        │(Entrenamiento)│        │(Entrenamiento)│
-└──────┬───────┘         └──────┬───────┘         └──────┬───────┘
-       │                        │                        │
-       └────────────────────────┼────────────────────────┘
-                                │
+┌───────────────┐         ┌───────────────┐         ┌───────────────┐
+│  Cliente 0    │         │  Cliente 1    │         │  Cliente 2    │
+│(Entrenamiento)│         │(Entrenamiento)│         │(Entrenamiento)│
+└──────┬────────┘         └──────┬────────┘         └──────┬────────┘
+       │                         │                         │
+       └─────────────────────────┼─────────────────────────┘
+                                 │
    Encapsulamiento PQC (Kyber-768) + Cifrado AES-256-GCM
-                                ▼
+                                 ▼
 ┌────────────────────────────────────────────────────────────────┐
 │                        SERVIDOR CENTRAL                        │
 │  1. Desencapsulación PQC & Descifrado de Gradientes            │
@@ -27,10 +27,10 @@ El sistema utiliza el conjunto de datos de referencia **UNSW-NB15** y se encuent
 └───────────────────────────────┬────────────────────────────────┘
                                 │
                                 ▼
-                     ┌───────────────────────┐
-                     │  Dashboard en Vivo    │
+                     ┌────────────────────────┐
+                     │  Dashboard en Vivo     │
                      │ (Monitoreo Dash/Plotly)│
-                     └───────────────────────┘
+                     └────────────────────────┘
 ```
 
 ---
